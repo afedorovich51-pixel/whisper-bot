@@ -1,80 +1,51 @@
 import os
 import threading
-from flask import Flask
+import time
 import telebot
+from flask import Flask
 from openai import OpenAI
 
-# --- 1. ДОМИК ДЛЯ РЕНДЕРА (чтобы Рендер видел что мы живые) ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+client = OpenAI(api_key=OPENAI_API_KEY)
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "whisper-bot is live! Our translator работает!"
-
-# --- 2. НАСТРОЙКИ РОБОТА ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-
-bot = telebot.TeleBot(BOT_TOKEN)
-client = OpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
-
-PROMPT = """
-Ты - бот шепота. Тебе присылают сообщение от партнера.
-Твоя задача - разобрать его.
-Верни ответ СТРОГО в формате:
-Накал: [число от 0 до 100]/100. Если >70 - сделай паузу, не отвечай сразу.
-Продолжение в голове: [что человек на самом деле думает, 1 фраза]
-Скрытый смысл: [что он хочет на самом деле]
-Формулировка для ответа: [мягкий, теплый ответ от имени пользователя, 1-2 предложения]
-
-Будь кратким, теплым, по-русски.
-"""
+SYSTEM_PROMPT = "Ты - шептун. Ты анализируешь сообщение девушки Яны и говоришь парню что у нее в голове. Формат: Накал: X/100, Продолжение в голове:..., Что делать:..."
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.reply_to(message, "Бот шепота готов. Перешли мне сообщение из чата с партнером.")
+    bot.reply_to(message, "Привет! Я шептун. Перешли мне сообщение от Яны.")
 
 @bot.message_handler(func=lambda m: True)
 def handle_all(message):
     try:
-        # Берем текст, даже если это пересланное сообщение
-        text = message.text or message.caption or ""
-        if not text:
+        if not message.text:
             return
-
-        # Если нет ключа OpenAI - сразу говорим
-        if not client:
-            bot.reply_to(message, "Ошибка: нет OPENAI_API_KEY в Render -> Environment. Добавь его!")
-            return
-
-        # Запрос к нейросети
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": PROMPT},
-                {"role": "user", "content": text}
-            ],
-            temperature=0.7
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": message.text}
+            ]
         )
-        answer = response.choices[0].message.content
-        bot.reply_to(message, answer)
-
+        bot.reply_to(message, response.choices[0].message.content)
     except Exception as e:
-        # ВАЖНО: теперь он не будет молчать, а напишет ошибку и в лог
-        print(f"ОШИБКА БОТА: {e}")
-        try:
-            bot.reply_to(message, f"Я упал, но я тут. Ошибка: {e}")
-        except:
-            pass
+        bot.reply_to(message, f"Я упал, но я тут. Ошибка: {e}")
 
-# --- 3. ЗАПУСКАЕМ ВСЕ ВМЕСТЕ ---
 def run_bot():
-    print("Робот завелся! Our translator слушает Телеграм...")
-    bot.infinity_polling()
+    print("Удаляю двойников...")
+    bot.remove_webhook()
+    time.sleep(2)
+    print("Запускаюсь один!")
+    bot.infinity_polling(skip_pending=True, timeout=20, long_polling_timeout=30)
+
+@app.route('/')
+def home():
+    return "Bot is alive"
 
 if __name__ == "__main__":
-    # Робота запускаем в соседней комнате (поток)
     threading.Thread(target=run_bot, daemon=True).start()
-    # А домик запускаем тут
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
